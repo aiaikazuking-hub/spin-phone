@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>スマホ回転ゲーム</title>
+    <title>スマホスピン</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }
@@ -15,14 +15,14 @@
     <div id="start-screen" class="flex flex-col items-center justify-center h-full w-full px-6 text-center absolute inset-0 z-50 bg-gray-900">
         <div class="mb-6 text-6xl">🔄</div>
         <h1 class="text-3xl font-bold mb-4">スマホスピン</h1>
-        <p class="text-gray-400 mb-8 text-sm leading-relaxed">
+        <p class="text-gray-400 mb-6 text-sm leading-relaxed">
             スマホを指に乗せて時計回りに回すゲームです。<br>
-            下のボタンを押してセンサーを「許可」してください。
+            <span class="text-yellow-400 font-bold">※必ずiPhone標準の「Safari」で開いてください</span>
         </p>
         <button id="start-btn" class="bg-blue-600 active:bg-blue-400 text-white font-bold py-4 px-10 rounded-full shadow-lg text-lg">
-            ゲームスタート
+            センサーを許可して開始
         </button>
-        <p id="error-msg" class="text-red-400 text-xs mt-4"></p>
+        <p id="error-msg" class="text-red-400 text-xs mt-4 px-4"></p>
     </div>
 
     <!-- ゲーム画面 -->
@@ -40,19 +40,23 @@
             <span class="text-gray-500 text-lg">回転</span>
         </div>
 
-        <!-- 進行度メーター -->
-        <div class="mt-8 relative w-44 h-44 border-4 border-gray-800 rounded-full flex items-center justify-center">
-            <div id="progress-indicator" class="absolute w-2 h-20 bg-blue-500 rounded-full origin-bottom" style="top: 8px; transform: rotate(0deg);"></div>
-            <div class="w-4 h-4 bg-white rounded-full z-10"></div>
+        <!-- 水平器＆回転メーター（視覚化） -->
+        <div class="mt-8 relative w-48 h-48 border-4 border-gray-700 rounded-full flex items-center justify-center bg-gray-800">
+            <!-- 水平の基準円 -->
+            <div class="absolute w-14 h-14 border-2 border-green-500/50 rounded-full"></div>
+            <!-- 回転針 -->
+            <div id="progress-indicator" class="absolute w-1.5 h-22 bg-blue-500 rounded-full origin-bottom" style="top: 8px; transform: rotate(0deg);"></div>
+            <!-- 水平器の気泡（傾きに合わせて動く） -->
+            <div id="level-bubble" class="w-6 h-6 bg-green-400 rounded-full z-10 shadow-[0_0_10px_rgba(74,222,128,0.8)] transition-transform duration-75"></div>
         </div>
 
-        <!-- センサー動作確認用（数値が動いていればセンサー成功） -->
-        <div id="debug-info" class="absolute bottom-4 text-gray-600 text-xs font-mono">
-            センサー待機中...
+        <!-- センサー動作確認用 -->
+        <div id="debug-info" class="absolute bottom-4 text-gray-400 text-xs font-mono text-center">
+            センサー受信待機中...<br>（数値が0のままならSafariで開き直してください）
         </div>
 
         <!-- リトライボタン -->
-        <button id="retry-btn" class="hidden absolute bottom-14 bg-blue-600 active:bg-blue-400 text-white font-bold py-3 px-8 rounded-full shadow-lg">
+        <button id="retry-btn" class="hidden absolute bottom-16 bg-blue-600 active:bg-blue-400 text-white font-bold py-3 px-8 rounded-full shadow-lg">
             もう一度遊ぶ
         </button>
     </div>
@@ -61,30 +65,35 @@
         let gameState = 'IDLE';
         let rotationCount = 0;
         let accumulatedAngle = 0;
-        let lastTime = 0;
         let stableStartTime = 0;
+
+        // 角度計算用（DeviceOrientationベース）
+        let lastAlpha = null;
+        let currentBeta = 0;
+        let currentGamma = 0;
+        let currentAlpha = 0;
+        let sensorReceived = false;
 
         document.getElementById('start-btn').addEventListener('click', async () => {
             const errorMsg = document.getElementById('error-msg');
-            errorMsg.textContent = "センサー許可を確認中...";
+            errorMsg.textContent = "センサー許可をリクエスト中...";
 
             try {
-                // iOS 13+ のモーションセンサー許可
-                if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-                    const motionRes = await DeviceMotionEvent.requestPermission();
-                    if (motionRes !== 'granted') {
-                        errorMsg.textContent = "モーションセンサーが拒否されました。ブラウザを完全に閉じてやり直してください。";
+                // iOS 13+ の両方のセンサー許可を順番に取得
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    const oriRes = await DeviceOrientationEvent.requestPermission();
+                    if (oriRes !== 'granted') {
+                        errorMsg.textContent = "傾きセンサーが許可されませんでした。Safariを完全に終了して再度開いてください。";
                         return;
                     }
                 }
-                // iOS 13+ の傾きセンサー許可（念のため両方取得）
-                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    await DeviceOrientationEvent.requestPermission();
+                if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                    await DeviceMotionEvent.requestPermission();
                 }
 
                 initApp();
             } catch (e) {
-                errorMsg.textContent = "エラー: " + e.message;
+                errorMsg.textContent = "エラー: Safariで開いているか確認してください (" + e.message + ")";
             }
         });
 
@@ -95,7 +104,11 @@
             document.getElementById('game-screen').classList.remove('hidden');
             document.getElementById('game-screen').classList.add('flex');
             
+            // 水平器・コンパスと同じ確実性の高いイベントを使用
+            window.addEventListener('deviceorientation', handleOrientation, true);
+            // 落下衝撃用の補助イベント
             window.addEventListener('devicemotion', handleMotion, true);
+            
             prepareGame();
         }
 
@@ -104,6 +117,7 @@
             rotationCount = 0;
             accumulatedAngle = 0;
             stableStartTime = 0;
+            lastAlpha = null;
             
             updateUI("指に乗せて水平に静止...", "text-yellow-400");
             document.getElementById('score-val').textContent = "0";
@@ -117,73 +131,109 @@
             statusText.className = `font-bold text-center tracking-wide ${colorClass}`;
         }
 
-        function handleMotion(event) {
-            const accelG = event.accelerationIncludingGravity || {x:0, y:0, z:0};
-            const accel = event.acceleration || {x:0, y:0, z:0};
-            const rateZ = (event.rotationRate && event.rotationRate.alpha) ? event.rotationRate.alpha : 0; 
-            
-            // 画面下部にリアルタイム数値を表示（動作確認用）
+        // 水平器とコンパスのセンサー処理
+        function handleOrientation(event) {
+            if (event.alpha === null && event.beta === null) return;
+            sensorReceived = true;
+
+            // iOSはwebkitCompassHeadingが時計回りの方位(0-360)
+            // alphaは反時計回り(0-360)なので 360 - alpha で時計回りに統一
+            let heading = (event.webkitCompassHeading !== undefined) 
+                ? event.webkitCompassHeading 
+                : (360 - (event.alpha || 0)) % 360;
+
+            currentAlpha = heading;
+            currentBeta = event.beta || 0;   // 縦傾き (-180 ~ 180)
+            currentGamma = event.gamma || 0; // 横傾き (-90 ~ 90)
+
+            // デバッグ表示更新
             document.getElementById('debug-info').textContent = 
-                `水平Z:${(accelG.z||0).toFixed(1)} | 回転速度:${rateZ.toFixed(0)}`;
+                `方位:${Math.round(currentAlpha)}° | 縦傾き:${Math.round(currentBeta)}° | 横傾き:${Math.round(currentGamma)}°`;
+
+            // 水平器の気泡を動かす（視覚フィードバック）
+            const bubbleX = Math.max(-60, Math.min(60, currentGamma * 2));
+            const bubbleY = Math.max(-60, Math.min(60, currentBeta * 2));
+            document.getElementById('level-bubble').style.transform = `translate(${bubbleX}px, ${bubbleY}px)`;
 
             if (gameState === 'IDLE' || gameState === 'GAMEOVER') return;
             const currentTime = Date.now();
 
-            // フェーズ1: 安定判定
-            if (gameState === 'STABILIZING') {
-                const isFlat = Math.abs(accelG.z) > 7.5; 
-                const isStill = Math.abs(accel.x || 0) < 1.5 && Math.abs(accel.y || 0) < 1.5;
-                const isNotRotating = Math.abs(rateZ) < 15; 
+            // 水平判定（縦・横ともに傾きが15度以内なら水平とみなす）
+            const isLevel = Math.abs(currentBeta) < 15 && Math.abs(currentGamma) < 15;
 
-                if (isFlat && isStill && isNotRotating) {
+            // --- フェーズ1: 安定判定 ---
+            if (gameState === 'STABILIZING') {
+                // 回転していないかチェック
+                let angleDiff = 0;
+                if (lastAlpha !== null) {
+                    angleDiff = Math.abs(currentAlpha - lastAlpha);
+                    if (angleDiff > 180) angleDiff = 360 - angleDiff;
+                }
+                lastAlpha = currentAlpha;
+
+                if (isLevel && angleDiff < 5) {
                     if (stableStartTime === 0) stableStartTime = currentTime;
                     
                     const remaining = Math.max(0, (2000 - (currentTime - stableStartTime)) / 1000).toFixed(1);
-                    updateUI(`そのままキープ... ${remaining}秒`, "text-yellow-300");
+                    updateUI(`緑の円に気泡をキープ... ${remaining}秒`, "text-green-300");
 
                     if (currentTime - stableStartTime > 2000) {
                         gameState = 'PLAYING';
-                        lastTime = currentTime;
+                        lastAlpha = currentAlpha;
                         if (navigator.vibrate) navigator.vibrate([100, 50, 100]); 
                         updateUI("スタート！時計回りに回せ！", "text-green-400");
                     }
                 } else {
                     stableStartTime = 0;
-                    updateUI("指に乗せて水平に静止...", "text-yellow-400");
+                    updateUI("気泡を中央（水平）に合わせる...", "text-yellow-400");
                 }
                 return;
             }
 
-            // フェーズ2: プレイ中
+            // --- フェーズ2: プレイ中 ---
             if (gameState === 'PLAYING') {
-                // 落下検知
-                if (Math.abs(accelG.z) < 4.5) {
-                    triggerGameOver("バランスを崩した！");
-                    return;
-                }
-                const impact = Math.sqrt((accel.x||0)**2 + (accel.y||0)**2 + (accel.z||0)**2);
-                if (impact > 18) {
-                    triggerGameOver("落下検知！");
+                // 1. 水平器応用：傾きが35度を超えたら指から落ちたと判定
+                if (Math.abs(currentBeta) > 35 || Math.abs(currentGamma) > 35) {
+                    triggerGameOver("バランスを崩した！（傾きすぎ）");
                     return;
                 }
 
-                // 回転カウント（時計回り）
-                if (lastTime !== 0) {
-                    const deltaTime = (currentTime - lastTime) / 1000;
-                    if (rateZ < -15) { 
-                        accumulatedAngle += Math.abs(rateZ) * deltaTime;
+                // 2. 方位磁針応用：角度の差分から時計回りの回転量を計算
+                if (lastAlpha !== null) {
+                    let delta = currentAlpha - lastAlpha;
+                    
+                    // 359度 -> 1度 の境界またぎ補正（時計回り）
+                    if (delta < -180) delta += 360;
+                    // 1度 -> 359度 の境界またぎ補正（反時計回り）
+                    if (delta > 180) delta -= 360;
+
+                    // 時計回り（プラス方向）なら加算
+                    if (delta > 0) {
+                        accumulatedAngle += delta;
                         if (accumulatedAngle >= 360) {
-                            rotationCount++;
-                            accumulatedAngle %= 360; 
+                            rotationCount += Math.floor(accumulatedAngle / 360);
+                            accumulatedAngle %= 360;
                             document.getElementById('score-val').textContent = rotationCount;
                         }
-                        document.getElementById('progress-indicator').style.transform = `rotate(${accumulatedAngle}deg)`;
-                    } else if (rateZ > 15) {
-                        accumulatedAngle = Math.max(0, accumulatedAngle - rateZ * deltaTime);
-                        document.getElementById('progress-indicator').style.transform = `rotate(${accumulatedAngle}deg)`;
+                    } else if (delta < 0) {
+                        // 反時計回り（逆回転）は戻す
+                        accumulatedAngle = Math.max(0, accumulatedAngle + delta);
                     }
+
+                    document.getElementById('progress-indicator').style.transform = `rotate(${accumulatedAngle}deg)`;
                 }
-                lastTime = currentTime;
+                lastAlpha = currentAlpha;
+            }
+        }
+
+        // 補助：急激な落下衝撃の検知
+        function handleMotion(event) {
+            if (gameState !== 'PLAYING') return;
+            const accel = event.acceleration;
+            if (!accel) return;
+            const impact = Math.sqrt((accel.x||0)**2 + (accel.y||0)**2 + (accel.z||0)**2);
+            if (impact > 20) {
+                triggerGameOver("落下衝撃を検知！");
             }
         }
 
