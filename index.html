@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>スマホ回転ゲーム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans h-screen flex flex-col items-center justify-center overflow-hidden relative">
+
+    <!-- スタート画面 -->
+    <div id="start-screen" class="flex flex-col items-center justify-center h-full w-full px-6 text-center absolute inset-0 z-50 bg-gray-900">
+        <div class="mb-6 text-6xl">🔄</div>
+        <h1 class="text-3xl font-bold mb-4">スマホスピン</h1>
+        <p class="text-gray-400 mb-8 text-sm leading-relaxed">
+            スマホを指に乗せて時計回りに回すゲームです。<br>
+            下のボタンを押してセンサーを「許可」してください。
+        </p>
+        <button id="start-btn" class="bg-blue-600 active:bg-blue-400 text-white font-bold py-4 px-10 rounded-full shadow-lg text-lg">
+            ゲームスタート
+        </button>
+        <p id="error-msg" class="text-red-400 text-xs mt-4"></p>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen" class="hidden flex-col items-center justify-center h-full w-full p-6 relative">
+        
+        <!-- ステータス表示 -->
+        <div id="status-box" class="absolute top-12 bg-gray-800 border border-gray-700 rounded-lg px-6 py-3 shadow-lg w-4/5">
+            <p id="status-text" class="text-yellow-400 font-bold text-center tracking-wide">準備中...</p>
+        </div>
+
+        <!-- スコア -->
+        <div class="flex flex-col items-center justify-center mt-8">
+            <span class="text-gray-500 text-sm font-semibold tracking-widest mb-1">SCORE</span>
+            <div class="text-8xl font-mono font-bold text-white mb-1" id="score-val">0</div>
+            <span class="text-gray-500 text-lg">回転</span>
+        </div>
+
+        <!-- 進行度メーター -->
+        <div class="mt-8 relative w-44 h-44 border-4 border-gray-800 rounded-full flex items-center justify-center">
+            <div id="progress-indicator" class="absolute w-2 h-20 bg-blue-500 rounded-full origin-bottom" style="top: 8px; transform: rotate(0deg);"></div>
+            <div class="w-4 h-4 bg-white rounded-full z-10"></div>
+        </div>
+
+        <!-- センサー動作確認用（数値が動いていればセンサー成功） -->
+        <div id="debug-info" class="absolute bottom-4 text-gray-600 text-xs font-mono">
+            センサー待機中...
+        </div>
+
+        <!-- リトライボタン -->
+        <button id="retry-btn" class="hidden absolute bottom-14 bg-blue-600 active:bg-blue-400 text-white font-bold py-3 px-8 rounded-full shadow-lg">
+            もう一度遊ぶ
+        </button>
+    </div>
+
+    <script>
+        let gameState = 'IDLE';
+        let rotationCount = 0;
+        let accumulatedAngle = 0;
+        let lastTime = 0;
+        let stableStartTime = 0;
+
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            const errorMsg = document.getElementById('error-msg');
+            errorMsg.textContent = "センサー許可を確認中...";
+
+            try {
+                // iOS 13+ のモーションセンサー許可
+                if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                    const motionRes = await DeviceMotionEvent.requestPermission();
+                    if (motionRes !== 'granted') {
+                        errorMsg.textContent = "モーションセンサーが拒否されました。ブラウザを完全に閉じてやり直してください。";
+                        return;
+                    }
+                }
+                // iOS 13+ の傾きセンサー許可（念のため両方取得）
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    await DeviceOrientationEvent.requestPermission();
+                }
+
+                initApp();
+            } catch (e) {
+                errorMsg.textContent = "エラー: " + e.message;
+            }
+        });
+
+        document.getElementById('retry-btn').addEventListener('click', prepareGame);
+
+        function initApp() {
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('game-screen').classList.remove('hidden');
+            document.getElementById('game-screen').classList.add('flex');
+            
+            window.addEventListener('devicemotion', handleMotion, true);
+            prepareGame();
+        }
+
+        function prepareGame() {
+            gameState = 'STABILIZING';
+            rotationCount = 0;
+            accumulatedAngle = 0;
+            stableStartTime = 0;
+            
+            updateUI("指に乗せて水平に静止...", "text-yellow-400");
+            document.getElementById('score-val').textContent = "0";
+            document.getElementById('progress-indicator').style.transform = `rotate(0deg)`;
+            document.getElementById('retry-btn').classList.add('hidden');
+        }
+
+        function updateUI(text, colorClass) {
+            const statusText = document.getElementById('status-text');
+            statusText.textContent = text;
+            statusText.className = `font-bold text-center tracking-wide ${colorClass}`;
+        }
+
+        function handleMotion(event) {
+            const accelG = event.accelerationIncludingGravity || {x:0, y:0, z:0};
+            const accel = event.acceleration || {x:0, y:0, z:0};
+            const rateZ = (event.rotationRate && event.rotationRate.alpha) ? event.rotationRate.alpha : 0; 
+            
+            // 画面下部にリアルタイム数値を表示（動作確認用）
+            document.getElementById('debug-info').textContent = 
+                `水平Z:${(accelG.z||0).toFixed(1)} | 回転速度:${rateZ.toFixed(0)}`;
+
+            if (gameState === 'IDLE' || gameState === 'GAMEOVER') return;
+            const currentTime = Date.now();
+
+            // フェーズ1: 安定判定
+            if (gameState === 'STABILIZING') {
+                const isFlat = Math.abs(accelG.z) > 7.5; 
+                const isStill = Math.abs(accel.x || 0) < 1.5 && Math.abs(accel.y || 0) < 1.5;
+                const isNotRotating = Math.abs(rateZ) < 15; 
+
+                if (isFlat && isStill && isNotRotating) {
+                    if (stableStartTime === 0) stableStartTime = currentTime;
+                    
+                    const remaining = Math.max(0, (2000 - (currentTime - stableStartTime)) / 1000).toFixed(1);
+                    updateUI(`そのままキープ... ${remaining}秒`, "text-yellow-300");
+
+                    if (currentTime - stableStartTime > 2000) {
+                        gameState = 'PLAYING';
+                        lastTime = currentTime;
+                        if (navigator.vibrate) navigator.vibrate([100, 50, 100]); 
+                        updateUI("スタート！時計回りに回せ！", "text-green-400");
+                    }
+                } else {
+                    stableStartTime = 0;
+                    updateUI("指に乗せて水平に静止...", "text-yellow-400");
+                }
+                return;
+            }
+
+            // フェーズ2: プレイ中
+            if (gameState === 'PLAYING') {
+                // 落下検知
+                if (Math.abs(accelG.z) < 4.5) {
+                    triggerGameOver("バランスを崩した！");
+                    return;
+                }
+                const impact = Math.sqrt((accel.x||0)**2 + (accel.y||0)**2 + (accel.z||0)**2);
+                if (impact > 18) {
+                    triggerGameOver("落下検知！");
+                    return;
+                }
+
+                // 回転カウント（時計回り）
+                if (lastTime !== 0) {
+                    const deltaTime = (currentTime - lastTime) / 1000;
+                    if (rateZ < -15) { 
+                        accumulatedAngle += Math.abs(rateZ) * deltaTime;
+                        if (accumulatedAngle >= 360) {
+                            rotationCount++;
+                            accumulatedAngle %= 360; 
+                            document.getElementById('score-val').textContent = rotationCount;
+                        }
+                        document.getElementById('progress-indicator').style.transform = `rotate(${accumulatedAngle}deg)`;
+                    } else if (rateZ > 15) {
+                        accumulatedAngle = Math.max(0, accumulatedAngle - rateZ * deltaTime);
+                        document.getElementById('progress-indicator').style.transform = `rotate(${accumulatedAngle}deg)`;
+                    }
+                }
+                lastTime = currentTime;
+            }
+        }
+
+        function triggerGameOver(reason) {
+            gameState = 'GAMEOVER';
+            if (navigator.vibrate) navigator.vibrate(500); 
+            updateUI(reason, "text-red-500");
+            document.getElementById('retry-btn').classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
